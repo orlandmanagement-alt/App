@@ -109,7 +109,7 @@
     setChallenge(t){ if(t) localStorage.setItem(CHALLENGE_KEY,t); else localStorage.removeItem(CHALLENGE_KEY); },
 
     async req(path, opt = {}) {
-  const base = String(API_BASE || "");
+  const base = String(API_BASE || "https://admin-enterprise-login.orlandmanagement.workers.dev");
   const url = base
     ? (base.replace(/\/+$/, "") + "/" + String(path || "").replace(/^\/+/, ""))
     : path;
