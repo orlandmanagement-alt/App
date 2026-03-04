@@ -109,29 +109,43 @@
     setChallenge(t){ if(t) localStorage.setItem(CHALLENGE_KEY,t); else localStorage.removeItem(CHALLENGE_KEY); },
 
     async req(path, opt = {}) {
-      const url = API_BASE ? (API_BASE + path) : path;
+  const base = String(API_BASE || "");
+  const url = base
+    ? (base.replace(/\/+$/, "") + "/" + String(path || "").replace(/^\/+/, ""))
+    : path;
 
-      const headers = Object.assign({ "content-type":"application/json" }, opt.headers || {});
-      const tok = API.getToken();
-      if (tok) headers["authorization"] = "Bearer " + tok;
-      if (opt.useChallenge) {
-        const ch = API.getChallenge();
-        if (ch) headers["x-challenge-token"] = ch;
-      }
+  const headers = Object.assign({}, opt.headers || {});
+  // hanya set content-type kalau memang ada body
+  if (opt.body != null && !headers["content-type"]) headers["content-type"] = "application/json";
 
-      const res = await fetch(url, {
-        method: opt.method || "GET",
-        headers,
-        body: opt.body || undefined
-      });
+  const tok = API.getToken();
+  if (tok) headers["authorization"] = "Bearer " + tok;
 
-      let data = null;
-      try { data = await res.json(); }
-      catch { data = { status:"server_error", data:{ message:"non_json_response", http:res.status } }; }
-      return data;
+  if (opt.useChallenge) {
+    const ch = API.getChallenge();
+    if (ch) headers["x-challenge-token"] = ch;
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: opt.method || "GET",
+      headers,
+      body: opt.body || undefined
+    });
+
+    // kalau bukan JSON, tetap balikin status+http supaya kebaca
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.includes("application/json")) {
+      const text = await res.text().catch(() => "");
+      return { status: "server_error", data: { message: "non_json_response", http: res.status, body: text.slice(0, 300) } };
     }
-  };
 
+    return await res.json();
+  } catch (e) {
+    // ini yang sekarang bikin "Uncaught Failed to fetch"
+    return { status: "network_error", data: { message: String(e?.message || e), url } };
+  }
+}
   // ==========================================================
   // ROUTER
   // ==========================================================
