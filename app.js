@@ -39,7 +39,7 @@
   // ==========================================================
   // CONFIG
   // ==========================================================
-  const API_BASE = (window.API_BASE || "https://admin-enterprise-login.orlandmanagement.workers.dev/admin/users/reset_password"); // "" = same origin
+  const API_BASE = (window.API_BASE || "https://admin-enterprise-login.orlandmanagement.workers.dev"); // "" = same origin
   const TOKEN_KEY = "auth_token";
   const CHALLENGE_KEY = "challenge_token";
 
