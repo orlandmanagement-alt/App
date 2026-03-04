@@ -145,7 +145,7 @@
     // ini yang sekarang bikin "Uncaught Failed to fetch"
     return { status: "network_error", data: { message: String(e?.message || e), url } };
   }
-}
+}};
   // ==========================================================
   // ROUTER
   // ==========================================================
