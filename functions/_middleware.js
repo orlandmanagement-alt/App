@@ -1,5 +1,5 @@
 // App/functions/_middleware.js
-import { json, readCookie, getSession, sha256Base64 } from "./_lib.js";
+import { json, readCookie, getSession, sha256Base64, getUserSessionVersion } from "./_lib.js";
 
 function getClientIp(req) {
   return (
@@ -30,7 +30,6 @@ async function uaHash(env, ua) {
   return await sha256Base64(`${String(ua || "")}|${env.HASH_PEPPER}`);
 }
 
-// Public endpoints (no login)
 const PUBLIC = new Set([
   "/api/setup/status",
   "/api/setup/bootstrap",
@@ -47,7 +46,7 @@ export async function onRequest(context) {
   if (!env.KV) return json(500, "server_error", { message: "missing_binding_KV" });
   if (!env.HASH_PEPPER) return json(500, "server_error", { message: "missing_HASH_PEPPER" });
 
-  // 1) IP block check (skip public)
+  // IP block check (skip public)
   if (!PUBLIC.has(path)) {
     const ip = getClientIp(request);
     const h = await ipHash(env, ip);
@@ -55,15 +54,21 @@ export async function onRequest(context) {
     if (reason) return json(403, "forbidden", { message: "ip_blocked", reason });
   }
 
-  // 2) allow public endpoints
   if (PUBLIC.has(path)) return next();
 
-  // 3) require session
   const sid = readCookie(request, "sid");
   const sess = await getSession(env, sid);
   if (!sess) return json(401, "unauthorized", null);
 
-  // 4) session binding check for admin/super_admin
+  // A) session_version check (force logout)
+  const dbSv = await getUserSessionVersion(env, sess.uid);
+  const tokenSv = Number(sess?.sv || 1);
+  if (dbSv !== tokenSv) {
+    await env.KV.delete(`sess:${sid}`);
+    return json(401, "unauthorized", { message: "session_revoked_relogin" });
+  }
+
+  // Admin binding check
   const roles = sess.roles || [];
   const isAdmin = roles.includes("super_admin") || roles.includes("admin");
 
@@ -75,7 +80,6 @@ export async function onRequest(context) {
     const curPrefH = await ipPrefixHash(env, ip);
 
     if (curUaH !== sess.ua_hash || curPrefH !== sess.ip_prefix_hash) {
-      // revoke KV session
       await env.KV.delete(`sess:${sid}`);
       return json(403, "forbidden", { message: "session_anomaly_relogin" });
     }
