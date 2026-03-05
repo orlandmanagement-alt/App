@@ -33,3 +33,28 @@ export async function onRequestPost({ request, env }) {
   res.headers.append("set-cookie", cookie("sid", sess.sid, { maxAge: sess.ttl }));
   return res;
 }
+
+  async function incPasswordFail(env, ip_hash){
+  const now = Math.floor(Date.now()/1000);
+  const hf = Math.floor(now/3600)*3600;
+  const id = new Date(hf*1000).toISOString().slice(0,13).replace(/[-T:]/g,""); // YYYYMMDDHH
+  const day_key = new Date(hf*1000).toISOString().slice(0,10);
+
+  await env.DB.prepare(`
+    INSERT INTO hourly_metrics (id,day_key,hour_epoch,password_fail,created_at,updated_at)
+    VALUES (?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET
+      password_fail = COALESCE(password_fail,0) + 1,
+      updated_at = excluded.updated_at
+  `).bind(id, day_key, hf, 1, now, now).run();
+
+  const windowStart = Math.floor(now/300)*300;
+  const actId = `password_fail:${windowStart}:${ip_hash}`;
+  await env.DB.prepare(`
+    INSERT INTO ip_activity (id,ip_hash,kind,cnt,window_start,updated_at)
+    VALUES (?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET
+      cnt = cnt + 1,
+      updated_at = excluded.updated_at
+  `).bind(actId, ip_hash, "password_fail", 1, windowStart, now).run();
+}
