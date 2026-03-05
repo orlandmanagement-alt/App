@@ -155,7 +155,21 @@ export async function onRequestPut({ env, data, request }){
     if (role) await setUserRole(env, user_id, role);
 
     await audit(env,{ actor_user_id:sess.uid, action:"user.update_profile", target_type:"user", target_id:user_id, meta:{ role } });
-    return json(200,"ok",{ updated:true });
+    if (action === "revoke_sessions") {
+  // super_admin only (sudah dicek di atas)
+  const now = nowSec();
+  await env.DB.prepare(`
+    UPDATE users
+    SET session_version = session_version + 1,
+        updated_at = ?
+    WHERE id=?
+  `).bind(now, user_id).run();
+
+  await audit(env,{ actor_user_id:sess.uid, action:"user.sessions.revoked", target_type:"user", target_id:user_id, meta:{} });
+  return json(200,"ok",{ revoked:true });
+}
+    
+                     return json(200,"ok",{ updated:true });
   }
 
   if (action === "reset_password"){
