@@ -1,9 +1,6 @@
-import { json, readJson, sha256Base64, randomB64, pbkdf2Hash, normEmail, requireEnv } from "../../_lib.js";
+import { json, readJson, sha256Base64, randomB64, pbkdf2Hash, normEmail } from "../../_lib.js";
 
 export async function onRequestPost({ request, env }) {
-  const miss = requireEnv(env, ["HASH_PEPPER"]);
-  if (miss.length) return json(500, "server_error", { message: "missing_env", missing: miss });
-
   const body = await readJson(request);
   const email = normEmail(body?.email);
   const password = String(body?.password || "");
@@ -13,7 +10,6 @@ export async function onRequestPost({ request, env }) {
     return json(400, "invalid_input", { message: "email invalid / password min 10" });
   }
 
-  // 1) only if no super_admin exists
   const exists = await env.DB.prepare(
     `SELECT 1 AS ok
      FROM users u
@@ -24,12 +20,12 @@ export async function onRequestPost({ request, env }) {
   ).first();
   if (exists) return json(409, "conflict", { message: "super_admin already exists" });
 
-  // 2) email unique
   const used = await env.DB.prepare("SELECT id FROM users WHERE email_norm=? LIMIT 1").bind(email).first();
   if (used) return json(409, "conflict", { message: "email already used" });
 
-  // 3) ensure role exists
   const now = Math.floor(Date.now() / 1000);
+
+  // ensure role exists
   let role = await env.DB.prepare("SELECT id FROM roles WHERE name='super_admin' LIMIT 1").first();
   if (!role) {
     const rid = crypto.randomUUID();
@@ -38,7 +34,6 @@ export async function onRequestPost({ request, env }) {
     role = { id: rid };
   }
 
-  // 4) create user
   const user_id = crypto.randomUUID();
   const email_hash = await sha256Base64(`${email}|${env.HASH_PEPPER}`);
   const salt = randomB64(16);
