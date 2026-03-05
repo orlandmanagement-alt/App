@@ -4,6 +4,53 @@ import {
   getRolesForUser, createSession, rateLimitKV, audit, sha256Base64
 } from "../_lib.js";
 
+// --- helper in api/login.js ---
+async function getSetting(env, k, defVal){
+  const r = await env.DB.prepare("SELECT v FROM system_settings WHERE k=? LIMIT 1").bind(k).first();
+  return r?.v != null ? String(r.v) : String(defVal);
+}
+function nowSec(){ return Math.floor(Date.now()/1000); }
+
+async function bumpIpActivity(env, ip_hash, kind, window_start, inc=1){
+  const id = `${kind}:${window_start}:${ip_hash}`;
+  const now = nowSec();
+  await env.DB.prepare(`
+    INSERT INTO ip_activity (id,ip_hash,kind,cnt,window_start,updated_at)
+    VALUES (?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET cnt=cnt+excluded.cnt, updated_at=excluded.updated_at
+  `).bind(id, ip_hash, kind, inc, window_start, now).run();
+
+  const r = await env.DB.prepare(`SELECT cnt FROM ip_activity WHERE id=? LIMIT 1`).bind(id).first();
+  return Number(r?.cnt || 0);
+}
+
+async function maybeAutoBlock(env, ip_hash){
+  const enabled = (await getSetting(env,"auto_block.enabled","true")) === "true";
+  if (!enabled) return { blocked:false };
+
+  const window_sec = Number(await getSetting(env,"auto_block.window_sec","900"));
+  const threshold = Number(await getSetting(env,"auto_block.threshold","10"));
+  const ttl_sec = Number(await getSetting(env,"auto_block.ttl_sec","3600"));
+
+  const now = nowSec();
+  const window_start = now - (now % window_sec);
+
+  const cnt = await bumpIpActivity(env, ip_hash, "password_fail", window_start, 1);
+  if (cnt < threshold) return { blocked:false, cnt, threshold };
+
+  // create ip_block + KV
+  await env.KV.put(`ipblock:${ip_hash}`, "auto_block_password_fail", { expirationTtl: ttl_sec });
+
+  const id = crypto.randomUUID();
+  const expires_at = now + ttl_sec;
+  await env.DB.prepare(`
+    INSERT INTO ip_blocks (id,ip_hash,reason,expires_at,created_at,created_by_user_id)
+    VALUES (?,?,?,?,?,NULL)
+  `).bind(id, ip_hash, "auto_block_password_fail", expires_at, now).run();
+
+  return { blocked:true, id, expires_at, cnt, threshold };
+}
+
 function nowSec() { return Math.floor(Date.now() / 1000); }
 function getClientIp(req) {
   return (
