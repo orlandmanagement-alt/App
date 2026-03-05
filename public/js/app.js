@@ -175,9 +175,89 @@ window.OrlandApp = (() => {
     };
   }
 
+
+  
   // ==========================================================
   // DASHBOARD PAGE (/dashboard.html)
   // ==========================================================
+  
+  function buildMenuTree(allMenus, allowedMenuIds) {
+  const byId = new Map();
+  const children = new Map();
+
+  for (const m of allMenus) {
+    if (!allowedMenuIds.has(m.id)) continue;
+    byId.set(m.id, m);
+    children.set(m.id, []);
+  }
+
+  for (const m of byId.values()) {
+    const pid = m.parent_id || "";
+    if (pid && byId.has(pid)) children.get(pid).push(m);
+  }
+
+  const roots = [];
+  for (const m of byId.values()) {
+    const pid = m.parent_id || "";
+    if (!pid || !byId.has(pid)) roots.push(m);
+  }
+
+  const sortFn = (a, b) => {
+    const sa = Number(a.sort_order || 0), sb = Number(b.sort_order || 0);
+    if (sa !== sb) return sa - sb;
+    return Number(a.created_at || 0) - Number(b.created_at || 0);
+  };
+  roots.sort(sortFn);
+  for (const id of children.keys()) children.get(id).sort(sortFn);
+
+  return { roots, children };
+}
+
+function iconForMenu(codeOrPath) {
+  const s = String(codeOrPath || "").toLowerCase();
+  if (s.includes("user")) return "fa-users";
+  if (s.includes("role")) return "fa-id-badge";
+  if (s.includes("menu") || s.includes("rbac")) return "fa-sitemap";
+  if (s.includes("security") || s.includes("audit")) return "fa-shield-halved";
+  if (s.includes("upload") || s.includes("media")) return "fa-cloud-arrow-up";
+  return "fa-circle-dot";
+}
+
+function renderSidebarMenu({ roots, children }, currentHash) {
+  const normHash = (h) => (h || "#/dashboard").trim();
+
+  function itemHtml(m, depth) {
+    const kids = children.get(m.id) || [];
+    const href = m.path || "#/dashboard";
+    const active = normHash(currentHash) === href;
+    const ico = iconForMenu(m.code || m.path);
+
+    if (!kids.length) {
+      return `
+        <a class="om-nav ${active ? "active" : ""} ${depth ? "child" : ""}" href="${href}">
+          <span class="ico"><i class="fa-solid ${ico}"></i></span>
+          <span class="txt">${escapeHtml(m.label)}</span>
+        </a>
+      `;
+    }
+
+    // Group (simple: render header + children)
+    return `
+      <div style="display:grid;gap:8px">
+        <div class="om-nav ${depth ? "child" : ""}" style="cursor:default;opacity:.9">
+          <span class="ico"><i class="fa-solid ${ico}"></i></span>
+          <span class="txt">${escapeHtml(m.label)}</span>
+          <span class="chev"><i class="fa-solid fa-angle-down"></i></span>
+        </div>
+        <div style="display:grid;gap:8px;margin-left:${depth ? 0 : 0}px">
+          ${kids.map(k => itemHtml(k, depth + 1)).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  return roots.map(m => itemHtml(m, 0)).join("");
+}
   async function initDashboard() {
     const out = qs("out");
     const meEl = qs("me");
