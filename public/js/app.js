@@ -219,101 +219,263 @@ window.OrlandApp = (() => {
     // --------------------------
     // Users panel
     // --------------------------
-    async function showUsers() {
-      if (!panel) return;
+              
+async function showUsers() {
+  if (!panel) return;
 
-      const r = await api("/api/users");
-      if (out) out.textContent = JSON.stringify(r, null, 2);
-      if (r.status !== "ok") {
-        panel.innerHTML = `<div class="small">Gagal load users: ${escapeHtml(r.status)}</div>`;
-        return;
-      }
+  // UI skeleton
+  panel.innerHTML = `
+    <div class="row" style="justify-content:space-between;align-items:flex-end">
+      <div>
+        <b>Users (Admin Module)</b>
+        <div class="small" style="margin-top:4px">Hanya user: super_admin, admin, staff</div>
+      </div>
+      <button id="reloadUsers">Reload</button>
+    </div>
 
-      const users = r.data?.users || [];
+    <div class="row" style="margin-top:10px">
+      <input id="q" placeholder="search email/name" style="flex:1;min-width:220px">
+      <select id="role" style="width:180px">
+        <option value="">all roles</option>
+        <option value="super_admin">super_admin</option>
+        <option value="admin">admin</option>
+        <option value="staff">staff</option>
+      </select>
+      <select id="status" style="width:160px">
+        <option value="">all status</option>
+        <option value="active">active</option>
+        <option value="disabled">disabled</option>
+      </select>
+      <button id="search">Search</button>
+    </div>
 
-      panel.innerHTML = `
-        <div class="row" style="justify-content:space-between">
-          <b>Users</b>
-          <button id="createUser">Create</button>
+    <hr class="hr" />
+
+    <div class="card" style="padding:12px">
+      <div class="row" style="justify-content:space-between">
+        <b id="formTitle">Create User</b>
+        <button id="clearForm">Clear</button>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <input id="uid" placeholder="user_id (auto)" disabled style="flex:1;min-width:240px">
+        <select id="f_role" style="width:200px">
+          <option value="staff">staff</option>
+          <option value="admin">admin</option>
+          <option value="super_admin">super_admin</option>
+        </select>
+        <select id="f_status" style="width:160px">
+          <option value="active">active</option>
+          <option value="disabled">disabled</option>
+        </select>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <input id="f_email" placeholder="email" style="flex:1;min-width:240px">
+        <input id="f_name" placeholder="display name" style="flex:1;min-width:220px">
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1;min-width:240px;position:relative">
+          <input id="f_password" type="password" placeholder="password (min 10)" style="width:100%;padding-right:42px">
+          <button id="togglePw" type="button"
+            style="position:absolute;right:6px;top:6px;height:34px;width:34px;border-radius:10px;border:1px solid #ddd;background:#fff;color:#111;cursor:pointer">
+            👁️
+          </button>
         </div>
+        <button id="saveUser" style="min-width:160px">Save</button>
+        <button id="resetPw" style="min-width:160px">Reset Password</button>
+        <button id="disableBtn" style="min-width:140px">Disable</button>
+        <button id="enableBtn" style="min-width:140px">Enable</button>
+        <button id="deleteBtn" style="min-width:140px">Delete</button>
+      </div>
 
-        <div class="small" style="margin-top:6px">
-          Actions: reset password (super_admin), disable (admin/super_admin)
-        </div>
+      <div class="small" style="margin-top:8px">
+        Catatan: Reset password & Delete hanya super_admin.
+      </div>
+    </div>
 
-        <table class="table" style="margin-top:10px">
-          <thead>
-            <tr><th>Email</th><th>Name</th><th>Status</th><th>Roles</th><th>Action</th></tr>
-          </thead>
-          <tbody>
-            ${users.map(u => `
-              <tr>
-                <td>${escapeHtml(u.email_norm)}</td>
-                <td>${escapeHtml(u.display_name || "")}</td>
-                <td>${escapeHtml(u.status)}</td>
-                <td>${escapeHtml((u.roles || []).join(","))}</td>
-                <td>
-                  <button class="btnReset" data-id="${escapeHtml(u.id)}">Reset Pw</button>
-                  <button class="btnDisable" data-id="${escapeHtml(u.id)}">Disable</button>
-                </td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      `;
+    <div style="height:12px"></div>
+    <div id="list"></div>
+  `;
 
-      // Create user
-      panel.querySelector("#createUser").onclick = async () => {
-        const email = prompt("Email user:");
-        if (!email) return;
+  const listEl = panel.querySelector("#list");
 
-        const name = prompt("Display name:");
-        const role = prompt("Role (admin/staff/client/talent):", "staff");
-        const password = prompt("Password (min 10):");
-        if (!password || password.length < 10) return alert("Password minimal 10 karakter.");
+  // eye toggle
+  const pwInput = panel.querySelector("#f_password");
+  panel.querySelector("#togglePw").onclick = () => {
+    pwInput.type = pwInput.type === "password" ? "text" : "password";
+  };
 
-        const rr = await api("/api/users", {
-          method: "POST",
-          body: JSON.stringify({ email, display_name: name, role, password }),
-        });
-        if (out) out.textContent = JSON.stringify(rr, null, 2);
-        if (rr.status === "ok") await showUsers();
-        else alert("Gagal: " + rr.status);
-      };
+  // form helpers
+  function clearForm() {
+    panel.querySelector("#formTitle").textContent = "Create User";
+    panel.querySelector("#uid").value = "";
+    panel.querySelector("#f_email").value = "";
+    panel.querySelector("#f_name").value = "";
+    panel.querySelector("#f_password").value = "";
+    panel.querySelector("#f_role").value = "staff";
+    panel.querySelector("#f_status").value = "active";
+  }
+  panel.querySelector("#clearForm").onclick = clearForm;
 
-      // Reset password
-      panel.querySelectorAll(".btnReset").forEach((btn) => {
-        btn.onclick = async () => {
-          const uid = btn.getAttribute("data-id");
-          const pw = prompt("Password baru (min 10):");
-          if (!pw || pw.length < 10) return alert("Password minimal 10 karakter.");
+  function fillForm(u) {
+    panel.querySelector("#formTitle").textContent = "Edit User";
+    panel.querySelector("#uid").value = u.id;
+    panel.querySelector("#f_email").value = u.email_norm;
+    panel.querySelector("#f_name").value = u.display_name || "";
+    panel.querySelector("#f_password").value = "";
+    panel.querySelector("#f_status").value = u.status || "active";
+    panel.querySelector("#f_role").value = (u.roles && u.roles[0]) ? u.roles[0] : "staff";
+  }
 
-          const rr = await api("/api/users", {
-            method: "PUT",
-            body: JSON.stringify({ action: "reset_password", user_id: uid, new_password: pw }),
-          });
-          if (out) out.textContent = JSON.stringify(rr, null, 2);
-          alert(rr.status);
-        };
-      });
+  // load + render
+  async function load() {
+    const q = panel.querySelector("#q").value.trim();
+    const role = panel.querySelector("#role").value;
+    const status = panel.querySelector("#status").value;
 
-      // Disable user
-      panel.querySelectorAll(".btnDisable").forEach((btn) => {
-        btn.onclick = async () => {
-          const uid = btn.getAttribute("data-id");
-          if (!confirm("Disable user ini?")) return;
+    let url = `/api/users?limit=100`;
+    if (q) url += `&q=${encodeURIComponent(q)}`;
+    if (role) url += `&role=${encodeURIComponent(role)}`;
+    if (status) url += `&status=${encodeURIComponent(status)}`;
 
-          const rr = await api("/api/users", {
-            method: "PUT",
-            body: JSON.stringify({ action: "disable", user_id: uid }),
-          });
-          if (out) out.textContent = JSON.stringify(rr, null, 2);
-          if (rr.status === "ok") await showUsers();
-          else alert("Gagal: " + rr.status);
-        };
-      });
+    const r = await api(url);
+    if (out) out.textContent = JSON.stringify(r, null, 2);
+
+    if (r.status !== "ok") {
+      listEl.innerHTML = `<div class="small">Gagal load users: ${escapeHtml(r.status)}</div>`;
+      return;
     }
 
+    const users = r.data?.users || [];
+    listEl.innerHTML = `
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Email</th><th>Name</th><th>Status</th><th>Roles</th><th>Updated</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${users.map(u => `
+            <tr>
+              <td>${escapeHtml(u.email_norm)}</td>
+              <td>${escapeHtml(u.display_name || "")}</td>
+              <td>${escapeHtml(u.status || "")}</td>
+              <td>${escapeHtml((u.roles||[]).join(","))}</td>
+              <td>${escapeHtml(String(u.updated_at||""))}</td>
+              <td><button class="pick" data-id="${escapeHtml(u.id)}">Edit</button></td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+
+    // attach pick
+    listEl.querySelectorAll(".pick").forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.getAttribute("data-id");
+        const u = users.find(x => x.id === id);
+        if (u) fillForm(u);
+      };
+    });
+  }
+
+  panel.querySelector("#reloadUsers").onclick = load;
+  panel.querySelector("#search").onclick = load;
+
+  // Save user (create or update)
+  panel.querySelector("#saveUser").onclick = async () => {
+    const user_id = panel.querySelector("#uid").value.trim();
+    const email = panel.querySelector("#f_email").value.trim().toLowerCase();
+    const display_name = panel.querySelector("#f_name").value.trim();
+    const password = panel.querySelector("#f_password").value;
+    const role = panel.querySelector("#f_role").value;
+    const status = panel.querySelector("#f_status").value;
+
+    if (!user_id) {
+      // create
+      if (!email.includes("@")) return alert("Email invalid");
+      if (!password || password.length < 10) return alert("Password minimal 10");
+      const r = await api("/api/users", {
+        method: "POST",
+        body: JSON.stringify({ email, display_name, password, roles: [role] }),
+      });
+      if (out) out.textContent = JSON.stringify(r, null, 2);
+      if (r.status !== "ok") return alert("Gagal: " + r.status);
+      clearForm();
+      await load();
+      return;
+    }
+
+    // update basic + role set (2 calls biar simple)
+    const r1 = await api("/api/users", {
+      method: "PUT",
+      body: JSON.stringify({ action: "update", user_id, display_name, status }),
+    });
+    if (out) out.textContent = JSON.stringify(r1, null, 2);
+    if (r1.status !== "ok") return alert("Gagal update: " + r1.status);
+
+    const r2 = await api("/api/users", {
+      method: "PUT",
+      body: JSON.stringify({ action: "set_roles", user_id, roles: [role] }),
+    });
+    if (out) out.textContent = JSON.stringify({ r1, r2 }, null, 2);
+    if (r2.status !== "ok") return alert("Gagal set role: " + r2.status);
+
+    await load();
+  };
+
+  // Reset password (super_admin only)
+  panel.querySelector("#resetPw").onclick = async () => {
+    const user_id = panel.querySelector("#uid").value.trim();
+    if (!user_id) return alert("Pilih user dulu (Edit).");
+    const new_password = panel.querySelector("#f_password").value;
+    if (!new_password || new_password.length < 10) return alert("Password minimal 10 (isi field password)");
+    const r = await api("/api/users", {
+      method: "PUT",
+      body: JSON.stringify({ action: "reset_password", user_id, new_password }),
+    });
+    if (out) out.textContent = JSON.stringify(r, null, 2);
+    alert(r.status);
+    panel.querySelector("#f_password").value = "";
+  };
+
+  panel.querySelector("#disableBtn").onclick = async () => {
+    const user_id = panel.querySelector("#uid").value.trim();
+    if (!user_id) return alert("Pilih user dulu (Edit).");
+    const r = await api("/api/users", { method: "PUT", body: JSON.stringify({ action: "disable", user_id }) });
+    if (out) out.textContent = JSON.stringify(r, null, 2);
+    if (r.status === "ok") await load();
+    else alert(r.status);
+  };
+
+  panel.querySelector("#enableBtn").onclick = async () => {
+    const user_id = panel.querySelector("#uid").value.trim();
+    if (!user_id) return alert("Pilih user dulu (Edit).");
+    const r = await api("/api/users", { method: "PUT", body: JSON.stringify({ action: "enable", user_id }) });
+    if (out) out.textContent = JSON.stringify(r, null, 2);
+    if (r.status === "ok") await load();
+    else alert(r.status);
+  };
+
+  // Hard delete (super_admin only)
+  panel.querySelector("#deleteBtn").onclick = async () => {
+    const user_id = panel.querySelector("#uid").value.trim();
+    if (!user_id) return alert("Pilih user dulu (Edit).");
+    if (!confirm("Hapus permanen user ini? (super_admin only)")) return;
+    const r = await api(`/api/users?id=${encodeURIComponent(user_id)}`, { method: "DELETE" });
+    if (out) out.textContent = JSON.stringify(r, null, 2);
+    if (r.status === "ok") {
+      clearForm();
+      await load();
+    } else {
+      alert(r.status);
+    }
+  };
+
+  await load();
+}
     // --------------------------
     // Talents panel
     // --------------------------
