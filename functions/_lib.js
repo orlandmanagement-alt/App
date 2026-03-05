@@ -1,3 +1,5 @@
+// App/functions/_lib.js
+
 export function json(code, status, data, extraHeaders = {}) {
   return new Response(JSON.stringify({ status, data }), {
     status: code,
@@ -59,7 +61,8 @@ export async function sha256Base64(str) {
 }
 
 /**
- * PBKDF2 SHA-256 with iteration clamp (max 100000).
+ * PBKDF2 SHA-256 with iteration clamp (Pages limit)
+ * - Cloudflare Pages PBKDF2 sering gagal kalau iter > 100000
  */
 export async function pbkdf2Hash(password, saltB64, iterations) {
   const iterReq = Number(iterations || 100000);
@@ -93,9 +96,9 @@ export async function getRolesForUser(env, userId) {
 }
 
 /**
- * Session in KV: sess:<sid> = {uid, roles, exp}
+ * Session in KV: sess:<sid> = { uid, roles, exp, ua_hash, ip_prefix_hash }
  */
-export async function createSession(env, userId, roles) {
+export async function createSession(env, userId, roles, bind = null) {
   const sid = crypto.randomUUID();
 
   const ttlAdmin = Number(env.SESSION_TTL_SEC_ADMIN || 7200);
@@ -104,10 +107,15 @@ export async function createSession(env, userId, roles) {
 
   const exp = Math.floor(Date.now() / 1000) + ttl;
 
-  await env.KV.put(`sess:${sid}`, JSON.stringify({ uid: userId, roles, exp }), {
-    expirationTtl: ttl,
-  });
+  const payload = {
+    uid: userId,
+    roles,
+    exp,
+    ua_hash: bind?.ua_hash || null,
+    ip_prefix_hash: bind?.ip_prefix_hash || null,
+  };
 
+  await env.KV.put(`sess:${sid}`, JSON.stringify(payload), { expirationTtl: ttl });
   return { sid, ttl, exp };
 }
 
@@ -121,10 +129,11 @@ export async function getSession(env, sid) {
 
   const now = Math.floor(Date.now() / 1000);
   if (now > Number(sess?.exp || 0)) return null;
+
   return sess;
 }
 
-/** Audit (best-effort) */
+/** Best-effort audit */
 export async function audit(env, { actor_user_id, action, target_type, target_id, meta }) {
   try {
     const id = crypto.randomUUID();
