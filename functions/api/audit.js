@@ -1,3 +1,4 @@
+// App/functions/api/audit.js
 import { json, hasRole } from "../_lib.js";
 
 export async function onRequestGet({ env, data, request }) {
@@ -6,17 +7,14 @@ export async function onRequestGet({ env, data, request }) {
 
   const url = new URL(request.url);
   const q = String(url.searchParams.get("q") || "").trim();
+  const since = Number(url.searchParams.get("since") || "0");
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || "50")));
-  const since = Number(url.searchParams.get("since") || "0"); // epoch sec
 
-  let sql = `SELECT id, actor_user_id, action, target_type, target_id, created_at
-             FROM audit_logs`;
+  let sql = `SELECT id,actor_user_id,action,target_type,target_id,meta_json,created_at FROM audit_logs`;
   const wh = [];
   const binds = [];
-
   if (since > 0) { wh.push("created_at >= ?"); binds.push(since); }
   if (q) { wh.push("action LIKE ?"); binds.push(`%${q}%`); }
-
   if (wh.length) sql += " WHERE " + wh.join(" AND ");
   sql += " ORDER BY created_at DESC LIMIT ?";
   binds.push(limit);
