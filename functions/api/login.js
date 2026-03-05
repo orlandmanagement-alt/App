@@ -18,7 +18,7 @@ export async function onRequestPost({ request, env }) {
   if (String(u.status) !== "active") return json(403, "forbidden", null);
   if (!u.password_hash || !u.password_salt) return json(403, "password_invalid", { message: "password_not_set" });
 
-  const iter = Number(u.password_iter || env.PBKDF2_ITER || 210000);
+  const iter = Number(u.password_iter || env.PBKDF2_ITER || 100000);
   const calc = await pbkdf2Hash(password, u.password_salt, iter);
   if (!timingSafeEqual(calc, u.password_hash)) return json(403, "password_invalid", null);
 
