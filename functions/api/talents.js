@@ -1,6 +1,9 @@
-import { json } from "../_lib.js";
+import { json, hasRole } from "../_lib.js";
 
-export async function onRequestGet({ env }) {
+export async function onRequestGet({ env, data }) {
+  const sess = data.session;
+  if (!hasRole(sess.roles, ["super_admin", "admin", "staff"])) return json(403, "forbidden", null);
+
   const r = await env.DB.prepare(
     `SELECT u.id,u.email_norm,u.display_name,u.status,u.updated_at
      FROM users u
@@ -11,9 +14,9 @@ export async function onRequestGet({ env }) {
      LIMIT 200`
   ).all();
 
+  // optional photo metadata in KV
   const talents = [];
   for (const u of (r.results || [])) {
-    // photo metadata in KV (optional)
     const metaRaw = await env.KV.get(`u_meta:${u.id}`);
     let photo_url = null;
     if (metaRaw) {
