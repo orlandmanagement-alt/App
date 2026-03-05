@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Orland Dashboard - Login</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="topbar">
+        <b>Dashboard Login</b>
+        <span class="small">dashboard.orlandmanagement.com</span>
+      </div>
+
+      <div class="small">Admin/Staff login password. (OTP client/talent bisa ditambah nanti)</div>
+      <div style="height:10px"></div>
+
+      <input id="email" placeholder="email" />
+      <div style="height:8px"></div>
+      <input id="pass" type="password" placeholder="password" />
+      <div style="height:12px"></div>
+
+      <button id="login" style="width:100%">Login</button>
+
+      <div class="row" style="margin-top:10px;justify-content:space-between">
+        <a class="small" href="/reset.html">Lupa password?</a>
+        <a class="small" href="/dashboard.html">Ke dashboard</a>
+      </div>
+
+      <details style="margin-top:10px">
+        <summary class="small">Debug</summary>
+        <pre id="out"></pre>
+      </details>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    window.OrlandApp.initLogin();
+  </script>
+</body>
+</html>
