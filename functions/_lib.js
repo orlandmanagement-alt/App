@@ -1,9 +1,3 @@
-// App/functions/_lib.js — FULL (latest)
-// Cloudflare Pages Functions helpers (D1 + KV + R2)
-// Notes:
-// - PBKDF2 iteration is clamped to max 100000 to avoid runtime limit errors.
-// - Session is stored in KV as opaque sid cookie (HttpOnly).
-
 export function json(code, status, data, extraHeaders = {}) {
   return new Response(JSON.stringify({ status, data }), {
     status: code,
@@ -17,17 +11,28 @@ export function json(code, status, data, extraHeaders = {}) {
 
 export async function readJson(request) {
   const ct = request.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    return await request.json().catch(() => null);
-  }
-  // allow empty body
+  if (ct.includes("application/json")) return await request.json().catch(() => null);
   const t = await request.text().catch(() => "");
   if (!t) return null;
-  try {
-    return JSON.parse(t);
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(t); } catch { return null; }
+}
+
+export function normEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+export function timingSafeEqual(a, b) {
+  a = String(a || "");
+  b = String(b || "");
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+
+export function hasRole(roles, allowed) {
+  const s = new Set((roles || []).map(String));
+  return allowed.some((r) => s.has(r));
 }
 
 export function readCookie(request, name) {
@@ -40,27 +45,7 @@ export function cookie(name, value, opt = {}) {
   const maxAge = opt.maxAge ?? 3600;
   const sameSite = opt.sameSite ?? "Lax";
   const path = opt.path ?? "/";
-  // Secure + HttpOnly for auth cookies
   return `${name}=${encodeURIComponent(value)}; Path=${path}; HttpOnly; Secure; SameSite=${sameSite}; Max-Age=${maxAge}`;
-}
-
-export function timingSafeEqual(a, b) {
-  a = String(a || "");
-  b = String(b || "");
-  if (a.length !== b.length) return false;
-  let r = 0;
-  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return r === 0;
-}
-
-export function normEmail(email) {
-  return String(email || "").trim().toLowerCase();
-}
-
-export function requireEnv(env, keys) {
-  const missing = [];
-  for (const k of keys) if (!env?.[k]) missing.push(k);
-  return missing;
 }
 
 export function randomB64(bytes = 16) {
@@ -74,13 +59,10 @@ export async function sha256Base64(str) {
 }
 
 /**
- * PBKDF2 (SHA-256) with iteration clamp.
- * Some Workers runtimes reject iterations > 100000.
+ * PBKDF2 SHA-256 with iteration clamp (max 100000).
  */
 export async function pbkdf2Hash(password, saltB64, iterations) {
   const iterReq = Number(iterations || 100000);
-
-  // Clamp iterations to avoid runtime limit
   const iter = Math.min(100000, Math.max(10000, iterReq));
 
   const salt = Uint8Array.from(atob(String(saltB64 || "")), (c) => c.charCodeAt(0));
@@ -92,7 +74,6 @@ export async function pbkdf2Hash(password, saltB64, iterations) {
     ["deriveBits"]
   );
 
-  // derive 256-bit key
   const bits = await crypto.subtle.deriveBits(
     { name: "PBKDF2", hash: "SHA-256", salt, iterations: iter },
     baseKey,
@@ -101,33 +82,24 @@ export async function pbkdf2Hash(password, saltB64, iterations) {
   return btoa(String.fromCharCode(...new Uint8Array(bits)));
 }
 
-export function hasRole(roles, allowed) {
-  const s = new Set((roles || []).map(String));
-  return allowed.some((r) => s.has(r));
-}
-
 export async function getRolesForUser(env, userId) {
   const r = await env.DB.prepare(
     `SELECT r.name AS name
      FROM user_roles ur
      JOIN roles r ON r.id=ur.role_id
      WHERE ur.user_id=?`
-  )
-    .bind(userId)
-    .all();
+  ).bind(userId).all();
   return (r.results || []).map((x) => x.name);
 }
 
 /**
- * Session stored in KV: sess:<sid> = {uid, roles, exp}
- * TTL depends on role.
+ * Session in KV: sess:<sid> = {uid, roles, exp}
  */
 export async function createSession(env, userId, roles) {
   const sid = crypto.randomUUID();
 
-  // TTLs (seconds)
-  const ttlAdmin = Number(env.SESSION_TTL_SEC_ADMIN || 7200); // 2h
-  const ttlStaff = Number(env.SESSION_TTL_SEC_STAFF || 28800); // 8h
+  const ttlAdmin = Number(env.SESSION_TTL_SEC_ADMIN || 7200);
+  const ttlStaff = Number(env.SESSION_TTL_SEC_STAFF || 28800);
   const ttl = hasRole(roles, ["super_admin", "admin"]) ? ttlAdmin : ttlStaff;
 
   const exp = Math.floor(Date.now() / 1000) + ttl;
@@ -145,21 +117,18 @@ export async function getSession(env, sid) {
   if (!raw) return null;
 
   let sess;
-  try {
-    sess = JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  try { sess = JSON.parse(raw); } catch { return null; }
 
   const now = Math.floor(Date.now() / 1000);
   if (now > Number(sess?.exp || 0)) return null;
   return sess;
 }
 
+/** Audit (best-effort) */
 export async function audit(env, { actor_user_id, action, target_type, target_id, meta }) {
   try {
     const id = crypto.randomUUID();
-    const now = Math.floor(Date.now()/1000);
+    const now = Math.floor(Date.now() / 1000);
     await env.DB.prepare(
       `INSERT INTO audit_logs (id,actor_user_id,action,target_type,target_id,meta_json,created_at)
        VALUES (?,?,?,?,?,?,?)`
@@ -172,7 +141,14 @@ export async function audit(env, { actor_user_id, action, target_type, target_id
       meta ? JSON.stringify(meta) : null,
       now
     ).run();
-  } catch {
-    // never block
-  }
+  } catch {}
+}
+
+/** KV rate limit counter */
+export async function rateLimitKV(env, key, limit, ttlSec) {
+  if (!env.KV) return { ok: true, n: 0 };
+  const cur = Number((await env.KV.get(key)) || "0");
+  const next = cur + 1;
+  await env.KV.put(key, String(next), { expirationTtl: ttlSec });
+  return { ok: next <= limit, n: next };
 }
