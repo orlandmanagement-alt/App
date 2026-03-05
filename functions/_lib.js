@@ -155,3 +155,24 @@ export async function getSession(env, sid) {
   if (now > Number(sess?.exp || 0)) return null;
   return sess;
 }
+
+export async function audit(env, { actor_user_id, action, target_type, target_id, meta }) {
+  try {
+    const id = crypto.randomUUID();
+    const now = Math.floor(Date.now()/1000);
+    await env.DB.prepare(
+      `INSERT INTO audit_logs (id,actor_user_id,action,target_type,target_id,meta_json,created_at)
+       VALUES (?,?,?,?,?,?,?)`
+    ).bind(
+      id,
+      actor_user_id || null,
+      String(action),
+      target_type || null,
+      target_id || null,
+      meta ? JSON.stringify(meta) : null,
+      now
+    ).run();
+  } catch {
+    // never block
+  }
+}
