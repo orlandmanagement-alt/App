@@ -1,12 +1,13 @@
-// App/functions/_middleware.js
 import { json, readCookie, getSession, sha256Base64 } from "./_lib.js";
 
-function getClientIp(req){
-  return req.headers.get("cf-connecting-ip")
-    || req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    || "0.0.0.0";
+function getClientIp(req) {
+  return (
+    req.headers.get("cf-connecting-ip") ||
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "0.0.0.0"
+  );
 }
-async function ipHash(env, ip){
+async function ipHash(env, ip) {
   return await sha256Base64(`${ip}|${env.HASH_PEPPER}`);
 }
 
@@ -25,9 +26,12 @@ export async function onRequest(context) {
   // Only protect /api/*
   if (!path.startsWith("/api/")) return next();
 
-  // 1) IP block check (skip for PUBLIC)
+  // Basic env check
+  if (!env.DB) return json(500, "server_error", { message: "missing_binding_DB" });
+
+  // 1) IP Block (skip for public)
   if (!PUBLIC.has(path)) {
-    if (!env.KV) return json(500, "server_error", { message: "missing_KV_binding" });
+    if (!env.KV) return json(500, "server_error", { message: "missing_binding_KV" });
     if (!env.HASH_PEPPER) return json(500, "server_error", { message: "missing_HASH_PEPPER" });
 
     const ip = getClientIp(request);
@@ -36,15 +40,14 @@ export async function onRequest(context) {
     if (reason) return json(403, "forbidden", { message: "ip_blocked", reason });
   }
 
-  // 2) Public endpoints
+  // 2) Public endpoints: continue
   if (PUBLIC.has(path)) return next();
 
-  // 3) Require session
+  // 3) Auth required
   const sid = readCookie(request, "sid");
   const sess = await getSession(env, sid);
   if (!sess) return json(401, "unauthorized", null);
 
-  // Attach session to context for handlers
-  context.data.session = { uid: sess.uid, roles: sess.roles, exp: sess.exp };
+  context.data.session = { uid: sess.uid, roles: sess.roles, exp: sess.exp, sid };
   return next();
 }
