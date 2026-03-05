@@ -61,8 +61,7 @@ export async function sha256Base64(str) {
 }
 
 /**
- * PBKDF2 SHA-256 with iteration clamp (Pages limit)
- * - Cloudflare Pages PBKDF2 sering gagal kalau iter > 100000
+ * PBKDF2 clamp for Pages runtime (iter > 100000 sering fail)
  */
 export async function pbkdf2Hash(password, saltB64, iterations) {
   const iterReq = Number(iterations || 100000);
@@ -95,8 +94,17 @@ export async function getRolesForUser(env, userId) {
   return (r.results || []).map((x) => x.name);
 }
 
+/** Fetch user's session_version (default 1) */
+export async function getUserSessionVersion(env, userId) {
+  const r = await env.DB.prepare(
+    "SELECT session_version FROM users WHERE id=? LIMIT 1"
+  ).bind(userId).first();
+  return Number(r?.session_version || 1);
+}
+
 /**
- * Session in KV: sess:<sid> = { uid, roles, exp, ua_hash, ip_prefix_hash }
+ * KV Session payload:
+ * { uid, roles, exp, sv, ua_hash, ip_prefix_hash }
  */
 export async function createSession(env, userId, roles, bind = null) {
   const sid = crypto.randomUUID();
@@ -104,19 +112,21 @@ export async function createSession(env, userId, roles, bind = null) {
   const ttlAdmin = Number(env.SESSION_TTL_SEC_ADMIN || 7200);
   const ttlStaff = Number(env.SESSION_TTL_SEC_STAFF || 28800);
   const ttl = hasRole(roles, ["super_admin", "admin"]) ? ttlAdmin : ttlStaff;
-
   const exp = Math.floor(Date.now() / 1000) + ttl;
+
+  const sv = await getUserSessionVersion(env, userId);
 
   const payload = {
     uid: userId,
     roles,
     exp,
+    sv,
     ua_hash: bind?.ua_hash || null,
     ip_prefix_hash: bind?.ip_prefix_hash || null,
   };
 
   await env.KV.put(`sess:${sid}`, JSON.stringify(payload), { expirationTtl: ttl });
-  return { sid, ttl, exp };
+  return { sid, ttl, exp, sv };
 }
 
 export async function getSession(env, sid) {
