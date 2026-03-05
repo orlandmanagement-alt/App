@@ -1,334 +1,202 @@
 // App/functions/api/users.js
-// Admin-only users (super_admin/admin/staff). Client/Tenant users will be separate later.
-//
-// Routes:
-// GET    /api/users?q=&status=&role=&limit=&offset=
-// POST   /api/users                 (super_admin/admin) create admin/staff user
-// PUT    /api/users                 (super_admin/admin) update/disable/enable/set_roles/reset_password
-// DELETE /api/users?id=...          (super_admin only) hard delete
-
 import {
-  json,
-  readJson,
-  normEmail,
-  sha256Base64,
-  randomB64,
-  pbkdf2Hash,
-  hasRole,
-  getRolesForUser,
+  json, readJson, hasRole, normEmail,
+  sha256Base64, randomB64, pbkdf2Hash, audit
 } from "../_lib.js";
 
-function nowSec() {
-  return Math.floor(Date.now() / 1000);
+function nowSec(){ return Math.floor(Date.now()/1000); }
+
+function canRead(sess){
+  return hasRole(sess.roles, ["super_admin","admin","staff"]);
+}
+function onlySA(sess){
+  return hasRole(sess.roles, ["super_admin"]);
+}
+function allowedRoleName(role){
+  return ["super_admin","admin","staff"].includes(String(role||""));
 }
 
-function canRead(session) {
-  return hasRole(session.roles, ["super_admin", "admin", "staff"]);
-}
-function canWrite(session) {
-  return hasRole(session.roles, ["super_admin", "admin"]);
-}
-function onlySuperAdmin(session) {
-  return hasRole(session.roles, ["super_admin"]);
+async function ensureRole(env, roleName){
+  const r = await env.DB.prepare("SELECT id FROM roles WHERE name=? LIMIT 1").bind(roleName).first();
+  if (r?.id) return r.id;
+  const id = crypto.randomUUID();
+  await env.DB.prepare("INSERT INTO roles (id,name,created_at) VALUES (?,?,?)")
+    .bind(id, roleName, nowSec()).run();
+  return id;
 }
 
-// Admin module only roles:
-const ADMIN_ROLES = new Set(["super_admin", "admin", "staff"]);
-
-async function ensureRole(env, roleName) {
+async function setUserRole(env, user_id, roleName){
+  const role_id = await ensureRole(env, roleName);
   const now = nowSec();
-  let role = await env.DB.prepare("SELECT id,name FROM roles WHERE name=? LIMIT 1")
-    .bind(roleName)
-    .first();
-  if (!role) {
-    const id = crypto.randomUUID();
-    await env.DB.prepare("INSERT INTO roles (id,name,created_at) VALUES (?,?,?)")
-      .bind(id, roleName, now)
-      .run();
-    role = { id, name: roleName };
-  }
-  return role;
+  // remove existing role links
+  await env.DB.prepare("DELETE FROM user_roles WHERE user_id=?").bind(user_id).run();
+  await env.DB.prepare("INSERT INTO user_roles (user_id,role_id,created_at) VALUES (?,?,?)")
+    .bind(user_id, role_id, now).run();
 }
 
-async function setUserRoles(env, userId, roleNames) {
-  const now = nowSec();
-  const names = Array.from(
-    new Set((roleNames || []).map((s) => String(s).trim()).filter(Boolean))
-  );
-
-  // Filter admin-only roles
-  const filtered = names.filter((r) => ADMIN_ROLES.has(r));
-  if (!filtered.length) throw new Error("roles_empty_or_not_allowed");
-
-  const roleIds = [];
-  for (const n of filtered) {
-    const r = await ensureRole(env, n);
-    roleIds.push(r.id);
-  }
-
-  await env.DB.prepare("DELETE FROM user_roles WHERE user_id=?").bind(userId).run();
-  for (const rid of roleIds) {
-    await env.DB.prepare("INSERT INTO user_roles (user_id,role_id,created_at) VALUES (?,?,?)")
-      .bind(userId, rid, now)
-      .run();
-  }
+async function getUserRoles(env, user_id){
+  const r = await env.DB.prepare(`
+    SELECT r.name AS name
+    FROM user_roles ur JOIN roles r ON r.id=ur.role_id
+    WHERE ur.user_id=?
+  `).bind(user_id).all();
+  return (r.results||[]).map(x=>x.name);
 }
 
-async function userHasAnyAdminRole(env, userId) {
-  const roles = await getRolesForUser(env, userId);
-  return roles.some((r) => ADMIN_ROLES.has(r));
-}
-
-// --------------------
-// GET /api/users
-// --------------------
-export async function onRequestGet({ env, data, request }) {
+// GET /api/users?limit=50&q=abc
+export async function onRequestGet({ env, data, request }){
   const sess = data.session;
-  if (!canRead(sess)) return json(403, "forbidden", null);
+  if (!canRead(sess)) return json(403,"forbidden",null);
 
   const url = new URL(request.url);
-  const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
-  const status = String(url.searchParams.get("status") || "").trim(); // active/disabled
-  const role = String(url.searchParams.get("role") || "").trim(); // filter by role name (optional)
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || "50")));
-  const offset = Math.max(0, Number(url.searchParams.get("offset") || "0"));
+  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")||"50")));
+  const q = String(url.searchParams.get("q")||"").trim().toLowerCase();
 
-  // Base select
-  let sql =
-    "SELECT id,email_norm,display_name,status,created_at,updated_at,phone_e164,phone_verified,tenant_id FROM users";
-  const wh = [];
+  let sql = `SELECT id,email_norm,display_name,status,updated_at,last_login_at,last_ip_hash FROM users`;
   const binds = [];
-
-  if (q) {
-    wh.push("(email_norm LIKE ? OR display_name LIKE ?)");
+  if (q){
+    sql += ` WHERE email_norm LIKE ? OR display_name LIKE ?`;
     binds.push(`%${q}%`, `%${q}%`);
   }
-  if (status) {
-    wh.push("status=?");
-    binds.push(status);
-  }
-  if (wh.length) sql += " WHERE " + wh.join(" AND ");
-  sql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?";
-  binds.push(limit, offset);
+  sql += ` ORDER BY updated_at DESC LIMIT ?`;
+  binds.push(limit);
 
   const r = await env.DB.prepare(sql).bind(...binds).all();
-  const rows = r.results || [];
+  const users = [];
+  for (const u of (r.results||[])){
+    const roles = await getUserRoles(env, u.id);
+    // filter hanya admin/staff/super_admin
+    const ok = roles.some(x=>["super_admin","admin","staff"].includes(x));
+    if (!ok) continue;
 
-  // Attach roles and filter admin-only users
-  const out = [];
-  for (const u of rows) {
-    const roles = await getRolesForUser(env, u.id);
-    const adminRoles = roles.filter((x) => ADMIN_ROLES.has(x));
-
-    // only return admin module users
-    if (!adminRoles.length) continue;
-
-    // optional role filter
-    if (role && !adminRoles.includes(role)) continue;
-
-    out.push({ ...u, roles: adminRoles });
+    users.push({
+      id: u.id,
+      email_norm: u.email_norm,
+      display_name: u.display_name,
+      status: u.status,
+      roles,
+      updated_at: u.updated_at,
+      last_login_at: u.last_login_at || null,
+      last_ip_hash: u.last_ip_hash || null,
+    });
   }
 
-  return json(200, "ok", { users: out, limit, offset });
+  return json(200,"ok",{ users });
 }
 
-// --------------------
-// POST /api/users  (create admin/staff)
-// body: { email, display_name?, password, roles:["staff"] or role:"staff" }
-// --------------------
-export async function onRequestPost({ env, data, request }) {
+// POST /api/users
+// { email, display_name, role, password(min10) }
+export async function onRequestPost({ env, data, request }){
   const sess = data.session;
-  if (!canWrite(sess)) return json(403, "forbidden", null);
-  if (!env.HASH_PEPPER) return json(500, "server_error", { message: "missing_HASH_PEPPER" });
+  if (!onlySA(sess)) return json(403,"forbidden",null);
 
   const b = await readJson(request);
   const email = normEmail(b?.email);
-  const display_name = String(b?.display_name || "").trim();
-  const password = String(b?.password || "");
+  const display_name = String(b?.display_name||"").trim() || null;
+  const role = String(b?.role||"staff").trim();
+  const password = String(b?.password||"");
 
-  let roles = [];
-  if (Array.isArray(b?.roles)) roles = b.roles;
-  else if (b?.role) roles = [b.role];
-  else roles = ["staff"];
+  if (!email.includes("@") || password.length < 10) return json(400,"invalid_input",{message:"email/password invalid"});
+  if (!allowedRoleName(role)) return json(400,"invalid_input",{message:"role not allowed"});
 
-  roles = roles.map((x) => String(x).trim()).filter(Boolean);
-
-  // Admin module only
-  roles = roles.filter((r) => ADMIN_ROLES.has(r));
-  if (!roles.length) return json(400, "invalid_input", { message: "roles_not_allowed" });
-
-  // Only super_admin can create admin/super_admin
-  const wantsPriv = roles.some((r) => ["super_admin", "admin"].includes(r));
-  if (wantsPriv && !onlySuperAdmin(sess)) {
-    return json(403, "forbidden", { message: "only_super_admin_can_assign_privileged_roles" });
-  }
-
-  if (!email.includes("@")) return json(400, "invalid_input", { message: "email_invalid" });
-  if (password.length < 10) return json(400, "invalid_input", { message: "password_min_10" });
-
-  const exists = await env.DB.prepare("SELECT id FROM users WHERE email_norm=? LIMIT 1")
-    .bind(email)
-    .first();
-  if (exists) return json(409, "conflict", { message: "email_exists" });
+  const used = await env.DB.prepare("SELECT id FROM users WHERE email_norm=? LIMIT 1").bind(email).first();
+  if (used) return json(409,"conflict",{message:"email already used"});
 
   const now = nowSec();
   const user_id = crypto.randomUUID();
-  const email_hash = await sha256Base64(`${email}|${env.HASH_PEPPER}`);
 
+  const email_hash = await sha256Base64(`${email}|${env.HASH_PEPPER}`);
   const salt = randomB64(16);
-  const iterReq = Number(env.PBKDF2_ITER || 100000);
-  const iter = Math.min(100000, Math.max(10000, iterReq));
+  const iter = Math.min(100000, Math.max(10000, Number(env.PBKDF2_ITER||100000)));
   const hash = await pbkdf2Hash(password, salt, iter);
 
-  await env.DB.prepare(
-    `INSERT INTO users (
+  await env.DB.prepare(`
+    INSERT INTO users (
       id,email_norm,email_hash,display_name,status,created_at,updated_at,
-      password_hash,password_salt,password_iter,password_algo,
-      phone_verified,profile_completed
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  )
-    .bind(
-      user_id,
-      email,
-      email_hash,
-      display_name || null,
-      "active",
-      now,
-      now,
-      hash,
-      salt,
-      iter,
-      "pbkdf2_sha256",
-      0,
-      0
-    )
-    .run();
+      password_hash,password_salt,password_iter,password_algo
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    user_id, email, email_hash, display_name, "active", now, now,
+    hash, salt, iter, "pbkdf2_sha256"
+  ).run();
 
-  await setUserRoles(env, user_id, roles);
+  await setUserRole(env, user_id, role);
 
-  return json(200, "ok", { created: true, user_id });
+  await audit(env,{ actor_user_id:sess.uid, action:"user.create", target_type:"user", target_id:user_id, meta:{ email, role } });
+
+  return json(200,"ok",{ created:true, id:user_id });
 }
 
-// --------------------
 // PUT /api/users
 // actions:
-// - update:        { user_id, display_name?, status? } (status active/disabled)
-// - set_roles:     { user_id, roles:[...] }
-// - reset_password:{ user_id, new_password }
-// - disable:       { user_id }
-// - enable:        { user_id }
-// --------------------
-export async function onRequestPut({ env, data, request }) {
+// - update_profile: { user_id, display_name, role }
+// - reset_password: { user_id, new_password }
+// - disable: { user_id }
+// - enable: { user_id }
+export async function onRequestPut({ env, data, request }){
   const sess = data.session;
+  if (!onlySA(sess)) return json(403,"forbidden",null);
+
   const b = await readJson(request);
-  const action = String(b?.action || "").trim();
-  const user_id = String(b?.user_id || "").trim();
-
-  if (!action) return json(400, "invalid_input", { message: "action_required" });
-  if (!user_id) return json(400, "invalid_input", { message: "user_id_required" });
-  if (!canWrite(sess)) return json(403, "forbidden", null);
-
-  // Ensure target is part of admin module
-  const isAdminUser = await userHasAnyAdminRole(env, user_id);
-  if (!isAdminUser) return json(403, "forbidden", { message: "target_not_admin_user" });
+  const action = String(b?.action||"").trim();
+  const user_id = String(b?.user_id||"").trim();
+  if (!action || !user_id) return json(400,"invalid_input",{message:"action & user_id required"});
 
   const now = nowSec();
 
-  if (action === "update") {
-    const display_name = b?.display_name != null ? String(b.display_name).trim() : null;
-    const status = b?.status != null ? String(b.status).trim() : null;
-    if (status && !["active", "disabled"].includes(status)) {
-      return json(400, "invalid_input", { message: "status_invalid" });
-    }
+  if (action === "update_profile"){
+    const display_name = String(b?.display_name||"").trim() || null;
+    const role = String(b?.role||"").trim();
+    if (role && !allowedRoleName(role)) return json(400,"invalid_input",{message:"role not allowed"});
 
-    await env.DB.prepare(
-      "UPDATE users SET display_name=COALESCE(?,display_name), status=COALESCE(?,status), updated_at=? WHERE id=?"
-    )
-      .bind(display_name, status, now, user_id)
-      .run();
+    await env.DB.prepare("UPDATE users SET display_name=?, updated_at=? WHERE id=?")
+      .bind(display_name, now, user_id).run();
 
-    return json(200, "ok", { updated: true });
+    if (role) await setUserRole(env, user_id, role);
+
+    await audit(env,{ actor_user_id:sess.uid, action:"user.update_profile", target_type:"user", target_id:user_id, meta:{ role } });
+    return json(200,"ok",{ updated:true });
   }
 
-  if (action === "disable") {
-    await env.DB.prepare("UPDATE users SET status='disabled', updated_at=? WHERE id=?")
-      .bind(now, user_id)
-      .run();
-    return json(200, "ok", { disabled: true });
-  }
-
-  if (action === "enable") {
-    await env.DB.prepare("UPDATE users SET status='active', updated_at=? WHERE id=?")
-      .bind(now, user_id)
-      .run();
-    return json(200, "ok", { enabled: true });
-  }
-
-  if (action === "set_roles") {
-    const roles = Array.isArray(b?.roles) ? b.roles.map((x) => String(x).trim()).filter(Boolean) : [];
-    if (!roles.length) return json(400, "invalid_input", { message: "roles_required" });
-
-    // Filter admin module roles
-    const filtered = roles.filter((r) => ADMIN_ROLES.has(r));
-    if (!filtered.length) return json(400, "invalid_input", { message: "roles_not_allowed" });
-
-    // Only super_admin can assign admin/super_admin
-    const wantsPriv = filtered.some((r) => ["super_admin", "admin"].includes(r));
-    if (wantsPriv && !onlySuperAdmin(sess)) {
-      return json(403, "forbidden", { message: "only_super_admin_can_assign_privileged_roles" });
-    }
-
-    await setUserRoles(env, user_id, filtered);
-    return json(200, "ok", { updated: true });
-  }
-
-  if (action === "reset_password") {
-    // Only super_admin can reset password
-    if (!onlySuperAdmin(sess)) return json(403, "forbidden", null);
-    if (!env.HASH_PEPPER) return json(500, "server_error", { message: "missing_HASH_PEPPER" });
-
-    const new_password = String(b?.new_password || "");
-    if (new_password.length < 10) return json(400, "invalid_input", { message: "password_min_10" });
+  if (action === "reset_password"){
+    const new_password = String(b?.new_password||"");
+    if (new_password.length < 10) return json(400,"invalid_input",{message:"password min 10"});
 
     const salt = randomB64(16);
-    const iterReq = Number(env.PBKDF2_ITER || 100000);
-    const iter = Math.min(100000, Math.max(10000, iterReq));
+    const iter = Math.min(100000, Math.max(10000, Number(env.PBKDF2_ITER||100000)));
     const hash = await pbkdf2Hash(new_password, salt, iter);
 
-    await env.DB.prepare(
-      "UPDATE users SET password_hash=?, password_salt=?, password_iter=?, password_algo=?, updated_at=? WHERE id=?"
-    )
-      .bind(hash, salt, iter, "pbkdf2_sha256", now, user_id)
-      .run();
+    await env.DB.prepare(`
+      UPDATE users SET password_hash=?, password_salt=?, password_iter=?, password_algo=?, updated_at=?
+      WHERE id=?
+    `).bind(hash, salt, iter, "pbkdf2_sha256", now, user_id).run();
 
-    return json(200, "ok", { reset: true });
+    await audit(env,{ actor_user_id:sess.uid, action:"user.reset_password", target_type:"user", target_id:user_id, meta:{} });
+    return json(200,"ok",{ updated:true });
   }
 
-  return json(400, "invalid_input", { message: "unknown_action" });
+  if (action === "disable" || action === "enable"){
+    const status = action === "disable" ? "disabled" : "active";
+    await env.DB.prepare("UPDATE users SET status=?, updated_at=? WHERE id=?").bind(status, now, user_id).run();
+    await audit(env,{ actor_user_id:sess.uid, action:`user.${action}`, target_type:"user", target_id:user_id, meta:{} });
+    return json(200,"ok",{ updated:true, status });
+  }
+
+  return json(400,"invalid_input",{message:"unknown_action"});
 }
 
-// --------------------
 // DELETE /api/users?id=...
-// super_admin only, hard delete
-// --------------------
-export async function onRequestDelete({ env, data, request }) {
+export async function onRequestDelete({ env, data, request }){
   const sess = data.session;
-  if (!onlySuperAdmin(sess)) return json(403, "forbidden", null);
+  if (!onlySA(sess)) return json(403,"forbidden",null);
 
   const url = new URL(request.url);
-  const id = String(url.searchParams.get("id") || "").trim();
-  if (!id) return json(400, "invalid_input", { message: "id_required" });
+  const id = String(url.searchParams.get("id")||"").trim();
+  if (!id) return json(400,"invalid_input",{message:"id required"});
 
-  // Ensure target is admin-module user
-  const isAdminUser = await userHasAnyAdminRole(env, id);
-  if (!isAdminUser) return json(403, "forbidden", { message: "target_not_admin_user" });
-
-  // Prevent deleting self accidentally
-  if (id === sess.uid) return json(400, "invalid_input", { message: "cannot_delete_self" });
-
-  // cascade should remove user_roles due FK (if FK enforced); still delete mapping first for safety
   await env.DB.prepare("DELETE FROM user_roles WHERE user_id=?").bind(id).run();
   await env.DB.prepare("DELETE FROM users WHERE id=?").bind(id).run();
 
-  return json(200, "ok", { deleted: true });
+  await audit(env,{ actor_user_id:sess.uid, action:"user.delete", target_type:"user", target_id:id, meta:{} });
+  return json(200,"ok",{ deleted:true });
 }
