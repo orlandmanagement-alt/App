@@ -1,4 +1,45 @@
 window.OrlandApp = (() => {
+
+  async function initSetup() {
+  const out = document.getElementById("out");
+
+  // cek status setup
+  const st = await api("/api/setup/status");
+  if (out) out.textContent = JSON.stringify(st, null, 2);
+
+  if (st.status !== "ok") {
+    alert("Gagal cek setup: " + st.status);
+    return;
+  }
+
+  // jika tidak perlu setup, balik ke login
+  if (!st.data?.setup_required) {
+    location.href = "/index.html";
+    return;
+  }
+
+  document.getElementById("go").onclick = async () => {
+    const display_name = String(document.getElementById("name").value || "").trim();
+    const email = String(document.getElementById("email").value || "").trim().toLowerCase();
+    const password = String(document.getElementById("pass").value || "");
+
+    const r = await api("/api/setup/bootstrap", {
+      method: "POST",
+      body: JSON.stringify({ display_name, email, password }),
+    });
+
+    if (out) out.textContent = JSON.stringify(r, null, 2);
+
+    if (r.status === "ok") {
+      alert("Super Admin berhasil dibuat. Silakan login.");
+      location.href = "/index.html";
+    } else {
+      alert("Gagal: " + r.status);
+    }
+  };
+}
+
+  
   async function api(path, opt = {}) {
     const headers = Object.assign({}, opt.headers || {});
     if (opt.body != null && !headers["content-type"]) headers["content-type"] = "application/json";
