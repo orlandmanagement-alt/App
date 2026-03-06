@@ -1,4 +1,3 @@
-// App/functions/api/password/reset/request.js
 import { json, readJson, normEmail, sha256Base64, audit } from "../../../_lib.js";
 import { sendMail } from "../../../_mail.js";
 
@@ -19,7 +18,6 @@ async function hmacSign(secret, msg){
 
 export async function onRequestPost({ env, request }) {
   if (!env.RESET_TOKEN_SECRET) return json(500,"server_error",{message:"missing_RESET_TOKEN_SECRET"});
-  if (!env.KV) return json(500,"server_error",{message:"missing_binding_KV"});
   if (!env.APP_BASE_URL) return json(500,"server_error",{message:"missing_APP_BASE_URL"});
 
   const b = await readJson(request);
@@ -28,7 +26,7 @@ export async function onRequestPost({ env, request }) {
 
   const u = await env.DB.prepare("SELECT id,status FROM users WHERE email_norm=? LIMIT 1").bind(email).first();
 
-  // Anti enumeration: selalu balas ok
+  // anti-enumeration
   if (!u || String(u.status)!=="active") return json(200,"ok",{ sent:true });
 
   const exp = nowSec() + 15*60;
@@ -42,8 +40,7 @@ export async function onRequestPost({ env, request }) {
 
   const link = `${String(env.APP_BASE_URL).replace(/\/$/,"")}/reset.html?token=${encodeURIComponent(token)}`;
 
-  // ✅ SEND EMAIL
-  const subject = "Reset Password — Orland Management Dashboard";
+  const subject = "Reset Password — Orland Dashboard";
   const text = `Klik link untuk reset password (berlaku 15 menit):\n${link}\n\nJika kamu tidak meminta reset, abaikan email ini.`;
   const html = `
     <div style="font-family:Arial,sans-serif;line-height:1.5">
@@ -59,7 +56,6 @@ export async function onRequestPost({ env, request }) {
   try {
     await sendMail(env, { to: email, subject, html, text });
   } catch (e) {
-    // tetap balas ok tapi audit error
     await audit(env,{ actor_user_id:null, action:"password.reset.email_fail", target_type:"user", target_id:u.id, meta:{ err:String(e) } });
     return json(200,"ok",{ sent:true });
   }

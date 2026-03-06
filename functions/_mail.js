@@ -1,6 +1,4 @@
-// App/functions/_mail.js
-import { json } from "./_lib.js";
-
+// App/functions/_mail.js — FULLPACK
 export async function sendMail(env, { to, subject, html, text }) {
   const provider = String(env.MAIL_PROVIDER || "resend").toLowerCase();
 

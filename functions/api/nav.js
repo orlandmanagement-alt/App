@@ -1,4 +1,4 @@
-import { json, hasRole, getRolesForUser } from "../_lib.js";
+import { json, getRolesForUser } from "../_lib.js";
 
 function sortMenus(arr){
   return arr.sort((a,b)=>{
@@ -7,16 +7,14 @@ function sortMenus(arr){
     return Number(a.created_at||0)-Number(b.created_at||0);
   });
 }
-
 function buildTree(menus){
-  const byId = new Map();
-  for (const m of menus) byId.set(m.id, { ...m, children: [] });
-  const roots = [];
+  const byId=new Map(); menus.forEach(m=>byId.set(m.id,{...m,children:[]}));
+  const roots=[];
   for (const m of byId.values()){
     if (m.parent_id && byId.has(m.parent_id)) byId.get(m.parent_id).children.push(m);
     else roots.push(m);
   }
-  const walk = (n)=>{ n.children = sortMenus(n.children); n.children.forEach(walk); };
+  const walk=(n)=>{ n.children=sortMenus(n.children); n.children.forEach(walk); };
   roots.forEach(walk);
   return sortMenus(roots);
 }
@@ -25,13 +23,9 @@ export async function onRequestGet({ env, data }) {
   const sess = data.session;
   const roles = sess.roles || (await getRolesForUser(env, sess.uid));
 
-  // super_admin: all menus
   let menus = [];
-  if (roles.includes("super_admin")) {
-    const r = await env.DB.prepare(`
-      SELECT id,code,label,path,parent_id,sort_order,icon,created_at
-      FROM menus ORDER BY sort_order ASC, created_at ASC
-    `).all();
+  if (roles.includes("super_admin")){
+    const r = await env.DB.prepare(`SELECT id,code,label,path,parent_id,sort_order,icon,created_at FROM menus ORDER BY sort_order ASC, created_at ASC`).all();
     menus = r.results || [];
   } else {
     const r = await env.DB.prepare(`
@@ -45,17 +39,14 @@ export async function onRequestGet({ env, data }) {
     menus = r.results || [];
   }
 
-  // include parents if missing
-  const have = new Set(menus.map(x=>x.id));
-  const parents = Array.from(new Set(menus.map(x=>x.parent_id).filter(Boolean))).filter(pid=>!have.has(pid));
+  const have = new Set(menus.map(m=>m.id));
+  const parents = Array.from(new Set(menus.map(m=>m.parent_id).filter(Boolean))).filter(pid=>!have.has(pid));
   if (parents.length){
-    const p = await env.DB.prepare(`
-      SELECT id,code,label,path,parent_id,sort_order,icon,created_at
-      FROM menus WHERE id IN (${parents.map(()=>"?").join(",")})
-    `).bind(...parents).all();
+    const p = await env.DB.prepare(`SELECT id,code,label,path,parent_id,sort_order,icon,created_at FROM menus WHERE id IN (${parents.map(()=>"?").join(",")})`)
+      .bind(...parents).all();
     for (const x of (p.results||[])) if(!have.has(x.id)) menus.push(x);
   }
 
   menus = sortMenus(menus);
-  return json(200, "ok", { roles, menus, tree: buildTree(menus) });
+  return json(200,"ok",{ roles, menus, tree: buildTree(menus) });
 }

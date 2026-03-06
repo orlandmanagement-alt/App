@@ -1,5 +1,4 @@
 import { json, readJson } from "../../../_lib.js";
-
 function nowSec(){ return Math.floor(Date.now()/1000); }
 
 async function hmacSign(secret, msg){
@@ -11,13 +10,11 @@ async function hmacSign(secret, msg){
     ["sign"]
   );
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg));
-  return btoa(String.fromCharCode(...new Uint8Array(sig)))
-    .replaceAll("+","-").replaceAll("/","_").replaceAll("=","");
+  return btoa(String.fromCharCode(...new Uint8Array(sig))).replaceAll("+","-").replaceAll("/","_").replaceAll("=","");
 }
 
 export async function onRequestPost({ env, request }) {
   if (!env.RESET_TOKEN_SECRET) return json(500,"server_error",{message:"missing_RESET_TOKEN_SECRET"});
-
   const b = await readJson(request);
   const token = String(b?.token||"").trim();
   if (!token) return json(400,"invalid_input",{message:"token required"});

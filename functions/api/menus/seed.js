@@ -1,5 +1,4 @@
 import { json, hasRole, audit } from "../../../_lib.js";
-
 function nowSec(){ return Math.floor(Date.now()/1000); }
 
 const DEFAULT_MENUS = [
@@ -14,27 +13,20 @@ const DEFAULT_MENUS = [
   { id:"menu_ops", code:"ops", label:"Ops", path:"/ops", sort_order:90, icon:"fa-solid fa-screwdriver-wrench" },
 ];
 
-export async function onRequestPost({ env, data }) {
-  const sess = data.session;
-  if (!hasRole(sess.roles, ["super_admin"])) return json(403,"forbidden",null);
-
-  const now = nowSec();
-  let upserted = 0;
-
+export async function onRequestPost({ env, data }){
+  const sess=data.session;
+  if(!hasRole(sess.roles, ["super_admin"])) return json(403,"forbidden",null);
+  const now=nowSec();
+  let upserted=0;
   for (const m of DEFAULT_MENUS){
     await env.DB.prepare(`
       INSERT INTO menus (id,code,label,path,parent_id,sort_order,icon,created_at)
       VALUES (?,?,?,?,NULL,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
-        code=excluded.code,
-        label=excluded.label,
-        path=excluded.path,
-        sort_order=excluded.sort_order,
-        icon=excluded.icon
-    `).bind(m.id, m.code, m.label, m.path, m.sort_order, m.icon, now).run();
+        code=excluded.code,label=excluded.label,path=excluded.path,sort_order=excluded.sort_order,icon=excluded.icon
+    `).bind(m.id,m.code,m.label,m.path,m.sort_order,m.icon,now).run();
     upserted++;
   }
-
   await audit(env,{actor_user_id:sess.uid, action:"menus.seed", target_type:"system", target_id:"menus", meta:{upserted}});
   return json(200,"ok",{ seeded:true, upserted });
 }

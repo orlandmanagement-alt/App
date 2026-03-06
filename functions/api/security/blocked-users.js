@@ -1,17 +1,12 @@
-// App/functions/api/security/blocked-users.js
 import { json, hasRole } from "../../_lib.js";
-
 function nowSec(){ return Math.floor(Date.now()/1000); }
-
-export async function onRequestGet({ env, data, request }) {
-  const sess = data.session;
-  if (!hasRole(sess.roles, ["super_admin"])) return json(403, "forbidden", null);
-
-  const url = new URL(request.url);
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || "100")));
-  const now = nowSec();
-
-  const r = await env.DB.prepare(`
+export async function onRequestGet({ env, data, request }){
+  const sess=data.session;
+  if(!hasRole(sess.roles, ["super_admin"])) return json(403,"forbidden",null);
+  const url=new URL(request.url);
+  const limit=Math.min(200, Math.max(1, Number(url.searchParams.get("limit")||"100")));
+  const now=nowSec();
+  const r=await env.DB.prepare(`
     SELECT
       b.id AS block_id,
       b.ip_hash,
@@ -29,6 +24,5 @@ export async function onRequestGet({ env, data, request }) {
     ORDER BY b.created_at DESC
     LIMIT ?
   `).bind(now, limit).all();
-
-  return json(200, "ok", { rows: r.results || [] });
+  return json(200,"ok",{ rows:r.results||[] });
 }

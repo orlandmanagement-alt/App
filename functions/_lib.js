@@ -1,4 +1,5 @@
-// App/functions/_lib.js
+// App/functions/_lib.js — FULLPACK
+// Utilities for Cloudflare Pages Functions (D1 + KV + optional R2)
 
 export function json(code, status, data, extraHeaders = {}) {
   return new Response(JSON.stringify({ status, data }), {
@@ -61,7 +62,7 @@ export async function sha256Base64(str) {
 }
 
 /**
- * PBKDF2 clamp for Pages runtime (iter > 100000 sering fail)
+ * PBKDF2 clamp (Pages runtime often fails above 100000)
  */
 export async function pbkdf2Hash(password, saltB64, iterations) {
   const iterReq = Number(iterations || 100000);
@@ -75,7 +76,6 @@ export async function pbkdf2Hash(password, saltB64, iterations) {
     false,
     ["deriveBits"]
   );
-
   const bits = await crypto.subtle.deriveBits(
     { name: "PBKDF2", hash: "SHA-256", salt, iterations: iter },
     baseKey,
@@ -94,26 +94,29 @@ export async function getRolesForUser(env, userId) {
   return (r.results || []).map((x) => x.name);
 }
 
-/** Fetch user's session_version (default 1) */
+export async function ensureRole(env, name) {
+  let r = await env.DB.prepare("SELECT id FROM roles WHERE name=? LIMIT 1").bind(name).first();
+  if (r?.id) return r.id;
+  const id = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare("INSERT INTO roles (id,name,created_at) VALUES (?,?,?)").bind(id, name, now).run();
+  return id;
+}
+
 export async function getUserSessionVersion(env, userId) {
-  const r = await env.DB.prepare(
-    "SELECT session_version FROM users WHERE id=? LIMIT 1"
-  ).bind(userId).first();
+  const r = await env.DB.prepare("SELECT session_version FROM users WHERE id=? LIMIT 1").bind(userId).first();
   return Number(r?.session_version || 1);
 }
 
 /**
- * KV Session payload:
- * { uid, roles, exp, sv, ua_hash, ip_prefix_hash }
+ * KV session payload: { uid, roles, exp, sv, ua_hash, ip_prefix_hash }
  */
 export async function createSession(env, userId, roles, bind = null) {
   const sid = crypto.randomUUID();
-
   const ttlAdmin = Number(env.SESSION_TTL_SEC_ADMIN || 7200);
   const ttlStaff = Number(env.SESSION_TTL_SEC_STAFF || 28800);
   const ttl = hasRole(roles, ["super_admin", "admin"]) ? ttlAdmin : ttlStaff;
   const exp = Math.floor(Date.now() / 1000) + ttl;
-
   const sv = await getUserSessionVersion(env, userId);
 
   const payload = {
@@ -124,7 +127,6 @@ export async function createSession(env, userId, roles, bind = null) {
     ua_hash: bind?.ua_hash || null,
     ip_prefix_hash: bind?.ip_prefix_hash || null,
   };
-
   await env.KV.put(`sess:${sid}`, JSON.stringify(payload), { expirationTtl: ttl });
   return { sid, ttl, exp, sv };
 }
@@ -133,24 +135,20 @@ export async function getSession(env, sid) {
   if (!sid) return null;
   const raw = await env.KV.get(`sess:${sid}`);
   if (!raw) return null;
-
   let sess;
   try { sess = JSON.parse(raw); } catch { return null; }
-
   const now = Math.floor(Date.now() / 1000);
   if (now > Number(sess?.exp || 0)) return null;
-
   return sess;
 }
 
-/** Best-effort audit */
-export async function audit(env, { actor_user_id, action, target_type, target_id, meta }) {
+export async function audit(env, { actor_user_id, action, target_type, target_id, meta, ip_hash, ua_hash, route, http_status, duration_ms }) {
   try {
     const id = crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
     await env.DB.prepare(
-      `INSERT INTO audit_logs (id,actor_user_id,action,target_type,target_id,meta_json,created_at)
-       VALUES (?,?,?,?,?,?,?)`
+      `INSERT INTO audit_logs (id,actor_user_id,action,target_type,target_id,meta_json,created_at,ip_hash,ua_hash,route,http_status,duration_ms)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       id,
       actor_user_id || null,
@@ -158,14 +156,17 @@ export async function audit(env, { actor_user_id, action, target_type, target_id
       target_type || null,
       target_id || null,
       meta ? JSON.stringify(meta) : null,
-      now
+      now,
+      ip_hash || null,
+      ua_hash || null,
+      route || null,
+      http_status != null ? Number(http_status) : null,
+      duration_ms != null ? Number(duration_ms) : null
     ).run();
   } catch {}
 }
 
-/** KV rate limit counter */
 export async function rateLimitKV(env, key, limit, ttlSec) {
-  if (!env.KV) return { ok: true, n: 0 };
   const cur = Number((await env.KV.get(key)) || "0");
   const next = cur + 1;
   await env.KV.put(key, String(next), { expirationTtl: ttlSec });
