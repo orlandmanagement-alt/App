@@ -1,4 +1,4 @@
-import { json, hasRole, audit } from "../../../_lib.js";
+import { json, hasRole, audit } from "../../_lib.js";
 function nowSec(){ return Math.floor(Date.now()/1000); }
 
 const DEFAULT_MENUS = [
