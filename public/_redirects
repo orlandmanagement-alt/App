@@ -1,0 +1,12 @@
+/dashboard   /dashboard.html   302
+/users       /users.html       302
+/roles       /roles.html       302
+/menus       /menus.html       302
+/rbac        /rbac.html        302
+/security    /security.html    302
+/ipblocks    /ipblocks.html    302
+/audit       /audit.html       302
+/ops         /ops.html         302
+/profile     /profile.html     302
+/setup       /setup.html       302
+/reset       /reset.html       302
